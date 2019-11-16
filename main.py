@@ -8,7 +8,7 @@ from allennlp.data.iterators import BucketIterator
 from allennlp.data.token_indexers import SingleIdTokenIndexer
 from allennlp.data.tokenizers import WordTokenizer
 from allennlp.data.tokenizers.word_splitter import JustSpacesWordSplitter
-from allennlp.models import Model
+from allennlp.models import Model, ComposedSeq2Seq
 from allennlp.modules import TextFieldEmbedder, Seq2SeqEncoder, Embedding
 from allennlp.modules.seq2seq_decoders import SeqDecoder, DecoderNet, LstmCellDecoderNet, AutoRegressiveSeqDecoder
 from allennlp.modules.seq2seq_encoders import PytorchSeq2SeqWrapper
@@ -105,9 +105,10 @@ if __name__ == '__main__':
     decoder = AutoRegressiveSeqDecoder(
         max_decoding_steps=100, target_namespace='train',
         target_embedder=embedding, beam_size=5, decoder_net=decoder_net, vocab=vocab)
-    model = Seq2SeqModel(encoder=encoder, decoder=decoder, vocab=vocab, src_embedder=embedder)
+    model = ComposedSeq2Seq(encoder=encoder, decoder=decoder, vocab=vocab, source_text_embedder=embedder)
+    # model = Seq2SeqModel(encoder=encoder, decoder=decoder, vocab=vocab, src_embedder=embedder)
     optimizer = optim.SGD(model.parameters(), lr=0.1)
-    iterator = BucketIterator(batch_size=8, sorting_keys=[("source_tokens", "num_tokens")])
+    iterator = BucketIterator(batch_size=16, sorting_keys=[("source_tokens", "num_tokens")])
     iterator.index_with(vocab)
     if torch.cuda.is_available():
         cuda_device = 0
