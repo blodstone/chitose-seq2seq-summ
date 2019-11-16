@@ -1,7 +1,9 @@
 import os
+import logging
 from typing import Dict, Optional, Iterable
 
 import torch
+from allennlp.common import Tqdm
 from allennlp.data import DatasetReader, Tokenizer, TokenIndexer, Instance, Vocabulary
 from allennlp.data.fields import TextField
 from allennlp.data.iterators import BucketIterator
@@ -11,7 +13,7 @@ from allennlp.data.tokenizers.word_splitter import JustSpacesWordSplitter
 from allennlp.models import Model, ComposedSeq2Seq, SimpleSeq2Seq
 from allennlp.modules import TextFieldEmbedder, Seq2SeqEncoder, Embedding
 from allennlp.modules.seq2seq_decoders import SeqDecoder, DecoderNet, LstmCellDecoderNet, AutoRegressiveSeqDecoder
-from allennlp.modules.seq2seq_encoders import PytorchSeq2SeqWrapper
+from allennlp.modules.seq2seq_encoders import PytorchSeq2SeqWrapper, StackedSelfAttentionEncoder
 from allennlp.modules.text_field_embedders import BasicTextFieldEmbedder
 from allennlp.nn import RegularizerApplicator, util
 from allennlp.training import Trainer
@@ -22,19 +24,18 @@ class SummDataReader(DatasetReader):
 
     def __init__(self,
                  tokenizer: Tokenizer = None,
-                 indexer: Dict[str, TokenIndexer] = None,
                  source_max_tokens: Optional[int] = None,
                  target_max_tokens: Optional[int] = None,
                  lazy: bool = False) -> None:
         super().__init__(lazy)
         self._tokenizer = tokenizer
-        self._indexer = indexer
         self._source_max_tokens = source_max_tokens
         self._target_max_tokens = target_max_tokens
 
     def read_data(self, src_file_path: str, tgt_file_path: str) -> Iterable[Instance]:
         src_file = open(src_file_path)
         tgt_file = open(tgt_file_path)
+        instances = []
         for src_seq, tgt_seq in zip(src_file, tgt_file):
             yield self.text_to_instance(src_seq, tgt_seq)
         src_file.close()
@@ -43,8 +44,8 @@ class SummDataReader(DatasetReader):
     def text_to_instance(self, src_seq, tgt_seq) -> Instance:
         tokenized_src = self._tokenizer.tokenize(src_seq)[:self._source_max_tokens]
         tokenized_tgt = self._tokenizer.tokenize(tgt_seq)[:self._target_max_tokens]
-        source_field = TextField(tokenized_src, self._indexer)
-        target_field = TextField(tokenized_tgt, self._indexer)
+        source_field = TextField(tokenized_src, {'tokens': SingleIdTokenIndexer()})
+        target_field = TextField(tokenized_tgt, {'tokens': SingleIdTokenIndexer(namespace='target_tokens')})
         return Instance({'source_tokens': source_field, 'target_tokens': target_field})
 
 
@@ -78,32 +79,35 @@ class Seq2SeqModel(Model):
 
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
     vocab_path = 'data/cnndm/vocab'
     tokenizer = WordTokenizer(JustSpacesWordSplitter())
-    indexer = {'tokens': SingleIdTokenIndexer('train')}
-    reader = SummDataReader(tokenizer, indexer, source_max_tokens=400)
-    train_dataset = reader.read_data(
-        'data/cnndm/train.txt.src', 'data/cnndm/train.txt.tgt.tagged')
-    validation_dataset = reader.read_data(
-        'data/cnndm/val.txt.src', 'data/cnndm/val.txt.tgt.tagged')
-    test_dataset = reader.read_data(
-        'data/cnndm/test.txt.src', 'data/cnndm/test.txt.tgt.tagged')
+    reader = SummDataReader(tokenizer, source_max_tokens=400)
+    train_dataset = [instance for instance in Tqdm.tqdm(reader.read_data(
+        'data/cnndm/train.txt.src', 'data/cnndm/train.txt.tgt.tagged'))]
+    validation_dataset = [instance for instance in Tqdm.tqdm(reader.read_data(
+        'data/cnndm/val.txt.src', 'data/cnndm/val.txt.tgt.tagged'))]
+    test_dataset = [instance for instance in Tqdm.tqdm(reader.read_data(
+        'data/cnndm/test.txt.src', 'data/cnndm/test.txt.tgt.tagged'))]
     if os.path.exists(vocab_path):
         vocab = Vocabulary.from_files(vocab_path)
     else:
         vocab = Vocabulary.from_instances(train_dataset, max_vocab_size=80000)
         vocab.save_to_files(vocab_path)
+    EMBEDDING_DIM = 128
+    HIDDEN_DIM = 64
     embedding = Embedding(
-        num_embeddings=vocab.get_vocab_size('train'),
-        embedding_dim=128)
+        num_embeddings=vocab.get_vocab_size('tokens'),
+        embedding_dim=EMBEDDING_DIM)
     embedder = BasicTextFieldEmbedder({'tokens': embedding})
-    encoder = PytorchSeq2SeqWrapper(
-        torch.nn.LSTM(input_size=128, hidden_size=128, num_layers=1, batch_first=True))
+    encoder = StackedSelfAttentionEncoder(input_dim=EMBEDDING_DIM, hidden_dim=HIDDEN_DIM, projection_dim=128,                                         feedforward_hidden_dim=128, num_layers=1, num_attention_heads=8)
+    # encoder = PytorchSeq2SeqWrapper(
+    #     torch.nn.LSTM(input_size=EMBEDDING_DIM, hidden_size=HIDDEN_DIM, num_layers=1, batch_first=True))
     # decoder_net = LstmCellDecoderNet(decoding_dim=128, target_embedding_dim=128)
     # decoder = AutoRegressiveSeqDecoder(
     #     max_decoding_steps=100, target_namespace='train',
     #     target_embedder=embedding, beam_size=5, decoder_net=decoder_net, vocab=vocab)
-    model = SimpleSeq2Seq(encoder=encoder, vocab=vocab, beam_size=5, max_decoding_steps=100, target_embedding_dim=128, source_embedder=embedder, target_namespace='train')
+    model = SimpleSeq2Seq(encoder=encoder, vocab=vocab, beam_size=5, max_decoding_steps=100, target_embedding_dim=EMBEDDING_DIM, source_embedder=embedder, target_namespace='target_tokens')
     # model = Seq2SeqModel(encoder=encoder, decoder=decoder, vocab=vocab, src_embedder=embedder)
     optimizer = optim.Adam(model.parameters(), lr=0.1)
     iterator = BucketIterator(batch_size=16, sorting_keys=[("source_tokens", "num_tokens")])
@@ -113,6 +117,6 @@ if __name__ == '__main__':
         model = model.cuda(cuda_device)
     else:
         cuda_device = -1
-    trainer = Trainer(model=model, optimizer=optimizer, train_dataset=train_dataset, iterator=iterator, num_epochs=2, cuda_device=cuda_device)
+    trainer = Trainer(model=model, optimizer=optimizer, train_dataset=train_dataset, validation_dataset=validation_dataset, iterator=iterator, num_epochs=2, cuda_device=cuda_device)
     print('Begin Training')
     trainer.train()
