@@ -8,7 +8,7 @@ from allennlp.data.iterators import BucketIterator
 from allennlp.data.token_indexers import SingleIdTokenIndexer
 from allennlp.data.tokenizers import WordTokenizer
 from allennlp.data.tokenizers.word_splitter import JustSpacesWordSplitter
-from allennlp.models import Model, ComposedSeq2Seq
+from allennlp.models import Model, ComposedSeq2Seq, SimpleSeq2Seq
 from allennlp.modules import TextFieldEmbedder, Seq2SeqEncoder, Embedding
 from allennlp.modules.seq2seq_decoders import SeqDecoder, DecoderNet, LstmCellDecoderNet, AutoRegressiveSeqDecoder
 from allennlp.modules.seq2seq_encoders import PytorchSeq2SeqWrapper
@@ -95,19 +95,17 @@ if __name__ == '__main__':
         vocab.save_to_files(vocab_path)
     embedding = Embedding(
         num_embeddings=vocab.get_vocab_size('train'),
-        vocab_namespace='train',
-        embedding_dim=128,
-        trainable=True)
+        embedding_dim=128)
     embedder = BasicTextFieldEmbedder({'tokens': embedding})
     encoder = PytorchSeq2SeqWrapper(
         torch.nn.LSTM(input_size=128, hidden_size=128, num_layers=1, batch_first=True))
-    decoder_net = LstmCellDecoderNet(decoding_dim=128, target_embedding_dim=128)
-    decoder = AutoRegressiveSeqDecoder(
-        max_decoding_steps=100, target_namespace='train',
-        target_embedder=embedding, beam_size=5, decoder_net=decoder_net, vocab=vocab)
-    model = ComposedSeq2Seq(encoder=encoder, decoder=decoder, vocab=vocab, source_text_embedder=embedder)
+    # decoder_net = LstmCellDecoderNet(decoding_dim=128, target_embedding_dim=128)
+    # decoder = AutoRegressiveSeqDecoder(
+    #     max_decoding_steps=100, target_namespace='train',
+    #     target_embedder=embedding, beam_size=5, decoder_net=decoder_net, vocab=vocab)
+    model = SimpleSeq2Seq(encoder=encoder, vocab=vocab, beam_size=5, max_decoding_steps=100, target_embedding_dim=128, source_embedder=embedder, target_namespace='train')
     # model = Seq2SeqModel(encoder=encoder, decoder=decoder, vocab=vocab, src_embedder=embedder)
-    optimizer = optim.SGD(model.parameters(), lr=0.1)
+    optimizer = optim.Adam(model.parameters(), lr=0.1)
     iterator = BucketIterator(batch_size=16, sorting_keys=[("source_tokens", "num_tokens")])
     iterator.index_with(vocab)
     if torch.cuda.is_available():
