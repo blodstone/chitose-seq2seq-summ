@@ -109,6 +109,11 @@ if __name__ == '__main__':
     optimizer = optim.SGD(model.parameters(), lr=0.1)
     iterator = BucketIterator(batch_size=8, sorting_keys=[("source_tokens", "num_tokens")])
     iterator.index_with(vocab)
-    trainer = Trainer(model=model, optimizer=optimizer, train_dataset=train_dataset, iterator=iterator, num_epochs=2)
+    if torch.cuda.is_available():
+        cuda_device = 0
+        model = model.cuda(cuda_device)
+    else:
+        cuda_device = -1
+    trainer = Trainer(model=model, optimizer=optimizer, train_dataset=train_dataset, iterator=iterator, num_epochs=2, cuda_device=cuda_device)
     print('Begin Training')
     trainer.train()
