@@ -83,8 +83,8 @@ if __name__ == '__main__':
     vocab_path = 'data/cnndm/vocab'
     tokenizer = WordTokenizer(JustSpacesWordSplitter())
     reader = SummDataReader(tokenizer, source_max_tokens=400)
-    train_dataset = [instance for instance in Tqdm.tqdm(reader.read_data(
-        'data/cnndm/train.txt.src', 'data/cnndm/train.txt.tgt.tagged'))]
+    # train_dataset = [instance for instance in Tqdm.tqdm(reader.read_data(
+    #     'data/cnndm/train.txt.src', 'data/cnndm/train.txt.tgt.tagged'))]
     validation_dataset = [instance for instance in Tqdm.tqdm(reader.read_data(
         'data/cnndm/val.txt.src', 'data/cnndm/val.txt.tgt.tagged'))]
     test_dataset = [instance for instance in Tqdm.tqdm(reader.read_data(
@@ -92,7 +92,7 @@ if __name__ == '__main__':
     if os.path.exists(vocab_path):
         vocab = Vocabulary.from_files(vocab_path)
     else:
-        vocab = Vocabulary.from_instances(train_dataset, max_vocab_size=80000)
+        vocab = Vocabulary.from_instances(test_dataset, max_vocab_size=80000)
         vocab.save_to_files(vocab_path)
     EMBEDDING_DIM = 128
     HIDDEN_DIM = 64
@@ -110,13 +110,13 @@ if __name__ == '__main__':
     model = SimpleSeq2Seq(encoder=encoder, vocab=vocab, beam_size=5, max_decoding_steps=100, target_embedding_dim=EMBEDDING_DIM, source_embedder=embedder, target_namespace='target_tokens')
     # model = Seq2SeqModel(encoder=encoder, decoder=decoder, vocab=vocab, src_embedder=embedder)
     optimizer = optim.Adam(model.parameters(), lr=0.1)
-    iterator = BucketIterator(batch_size=16, sorting_keys=[("source_tokens", "num_tokens")])
+    iterator = BucketIterator(batch_size=4, sorting_keys=[("source_tokens", "num_tokens")])
     iterator.index_with(vocab)
     if torch.cuda.is_available():
         cuda_device = 0
         model = model.cuda(cuda_device)
     else:
         cuda_device = -1
-    trainer = Trainer(model=model, optimizer=optimizer, train_dataset=train_dataset, validation_dataset=validation_dataset, iterator=iterator, num_epochs=2, cuda_device=cuda_device)
+    trainer = Trainer(model=model, optimizer=optimizer, train_dataset=test_dataset, validation_dataset=validation_dataset, iterator=iterator, num_epochs=2, cuda_device=cuda_device)
     print('Begin Training')
     trainer.train()
